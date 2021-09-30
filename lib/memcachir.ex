@@ -28,7 +28,7 @@ defmodule Memcachir do
   if the given key doesn't exist.
   """
   def get(key, opts \\ []) do
-    case key_to_node(key) do
+    case Cluster.get_node(key) do
       {:ok, node} -> execute(&Memcache.get/3, node, [key, opts])
       {:error, reason} -> {:error, "unable to get: #{reason}"}
     end
@@ -70,7 +70,7 @@ defmodule Memcachir do
   increments the key by value.
   """
   def incr(key, value \\ 1, opts \\ []) do
-    case key_to_node(key) do
+    case Cluster.get_node(key) do
       {:ok, node} -> execute(&Memcache.incr/3, node, [key, [{:by, value} | opts]])
       {:error, reason} -> {:error, "unable to inc: #{reason}"}
     end
@@ -84,7 +84,7 @@ defmodule Memcachir do
 
   """
   def set(key, value, opts \\ []) do
-    case key_to_node(key) do
+    case Cluster.get_node(key) do
       {:ok, node} -> execute(&Memcache.set/4, node, [key, value, opts])
       {:error, reason} -> {:error, "unable to set: #{reason}"}
     end
@@ -96,7 +96,7 @@ defmodule Memcachir do
   Returns `{:ok, :deleted}`.
   """
   def delete(key) do
-    case key_to_node(key) do
+    case Cluster.get_node(key) do
       {:ok, node} -> execute(&Memcache.delete/2, node, [key])
       {:error, reason} -> {:error, "unable to delete: #{reason}"}
     end
@@ -108,15 +108,7 @@ defmodule Memcachir do
   Returns `{:ok}`.
   """
   def flush(opts \\ []) do
-    execute(&Memcache.flush/2, list_nodes(), [opts])
-  end
-
-  @doc """
-  List all currently registered node names, like `[:"localhost:11211"]`.
-  """
-  def list_nodes() do
-    Cluster.servers()
-    |> Enum.map(&Pool.poolname(&1))
+    execute(&Memcache.flush/2, Cluster.servers(), [opts])
   end
 
   defp execute(_fun, [], _args) do
@@ -131,9 +123,19 @@ defmodule Memcachir do
   end
   defp execute(fun, node, args) do
     try do
-      :poolboy.transaction(node, &apply(fun, [&1 | args]))
+      node
+      |> Pool.poolname()
+      |> :poolboy.transaction(&apply(fun, [&1 | args]))
+      |> case do
+        {:error, :closed} = error ->
+          Memcachir.Cluster.mark_node(node)
+          error
+        other -> other
+      end
     catch
-      :exit, _ -> {:error, "Node not available"}
+      :exit, _ ->
+        Memcachir.Cluster.mark_node(node)
+        {:error, "Node not available"}
     end
   end
 
@@ -173,19 +175,12 @@ defmodule Memcachir do
     |> Cluster.get_nodes()
     |> case do
       {:ok, keys_to_nodes} ->
-        key_fn   = fn {_, n} -> Pool.poolname(n) end
+        key_fn   = fn {_, n} -> n end
         value_fn = fn {k, _} -> key_to_command[k] end
         nodes_to_keys = Enum.group_by(keys_to_nodes, key_fn, value_fn)
 
         {:ok, nodes_to_keys}
       {:error, error} -> {:error, error}
-    end
-  end
-
-  defp key_to_node(key) do
-    case Cluster.get_node(key) do
-      {:error, reason} -> {:error, reason}
-      {:ok, node} -> {:ok, Pool.poolname(node)}
     end
   end
 end
