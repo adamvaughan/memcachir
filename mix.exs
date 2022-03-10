@@ -45,7 +45,9 @@ defmodule Memcachir.Mixfile do
       {:dialyxir, "~> 0.5", only: :dev, runtime: false},
       {:elasticachex, "~> 1.1"},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false},
-      {:herd, "~> 0.4.3"},
+      {:herd,
+       git: "git@github.com:adamvaughan/herd",
+       tag: "6471fccd87966ef0e1121578c7a7dd7930041fb3"},
       {:memcachex, "~> 0.5"}
     ]
   end
