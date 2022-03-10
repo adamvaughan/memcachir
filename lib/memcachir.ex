@@ -84,8 +84,10 @@ defmodule Memcachir do
 
   """
   def set(key, value, opts \\ []) do
+    {retry, opts} = Keyword.pop(opts, :retry, false)
+
     case Cluster.get_node(key) do
-      {:ok, node} -> execute(&Memcache.set/4, node, [key, value, opts])
+      {:ok, node} -> execute(&Memcache.set/4, node, [key, value, opts], retry)
       {:error, reason} -> {:error, "unable to set: #{reason}"}
     end
   end
@@ -111,31 +113,42 @@ defmodule Memcachir do
     execute(&Memcache.flush/2, Cluster.servers(), [opts])
   end
 
-  defp execute(_fun, [], _args) do
+  defp execute(fun, node, args, retry \\ false)
+  defp execute(_fun, [], _args, _retry) do
     {:error, "unable to flush: no_nodes"}
   end
-  defp execute(fun, [node | nodes], args) do
+  defp execute(fun, [node | nodes], args, retry) do
     if length(nodes) > 0 do
-      execute(fun, nodes, args)
+      execute(fun, nodes, args, retry)
     end
 
-    execute(fun, node, args)
+    execute(fun, node, args, retry)
   end
-  defp execute(fun, node, args) do
+  defp execute(fun, node, args, retry) do
     try do
       node
       |> Pool.poolname()
       |> :poolboy.transaction(&apply(fun, [&1 | args]))
       |> case do
         {:error, :closed} = error ->
-          Memcachir.Cluster.mark_node(node)
-          error
+          if retry do
+            IO.puts("Retrying")
+            execute(fun, node, args, false)
+          else
+            Memcachir.Cluster.mark_node(node)
+            error
+          end
         other -> other
       end
     catch
       :exit, _ ->
-        Memcachir.Cluster.mark_node(node)
-        {:error, "Node not available"}
+        if retry do
+          IO.puts("Retrying")
+          execute(fun, node, args, false)
+        else
+          Memcachir.Cluster.mark_node(node)
+          {:error, "Node not available"}
+        end
     end
   end
 
